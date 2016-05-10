@@ -87,7 +87,7 @@ void vec_vec_mult( double* c, double* a, int rows, double* b)
 	for (i = 0; i < rows; i++)
 	{
 		sum += a[i] * b[i];
-	}	
+	}
     *c = sum + 0.0;
 }
 
@@ -104,8 +104,8 @@ void normalize( double* c, double* a, int rows )
     for (int i = 0; i < rows; i++)
 	{
 		c[i] = a[i] / sqrt(magnitude);
-    }		
-} 
+    }
+}
 
 
 /*
@@ -158,7 +158,7 @@ int main( int argc, char* argv[] )
 
 
 	double tolerance = pow(10, -6.0); 	// default value
-    long numIterations = 500; 			// default value	
+    long numIterations = 500; 			// default value
 
     double* a;             // pointer to matrix data
     int rows;              // number of rows in matrix
@@ -185,7 +185,7 @@ int main( int argc, char* argv[] )
 	//					Process Command Line									  //
 	//----------------------------------------------------------------------------//
 	//----------------------------------------------------------------------------//
-	
+
 	int c;
 
     const char* filename = argv[1];
@@ -280,7 +280,7 @@ int main( int argc, char* argv[] )
 	*     int* s    - location  to store  subinterval  starting  index
 	*     int* e    - location  to store  subinterval  ending  index
 	*/
-	
+
 	int startingIndex;
 	int endingIndex;
 	decompose1d( rows, number_of_processes, rank, &startingIndex , &endingIndex );
@@ -316,7 +316,7 @@ int main( int argc, char* argv[] )
 	double readTime = endReadTime - startReadTime;
 
 	double startTime = MPI_Wtime();
-	
+
 	//----------------------------------------------------------------------------//
 	//----------------------------------------------------------------------------//
 	//					Variables for Power method								  //
@@ -343,12 +343,12 @@ int main( int argc, char* argv[] )
 	for ( int i = 0; i < rows; i++) yGlobal[i] = 1.0;
 
 	for ( int i = 0; i < numLocalRows; i++ ) yLocal[i] = yGlobal[offset[0] + i];
-		
+
 	//normalize x (based on placeholder y)
 	normalize( x, yGlobal, rows );
-	
+
 	// initialized to any value
-	double lambda = 0.0; 
+	double lambda = 0.0;
 
 	// make sure |lambda-lambda_0| > tolerance
 	double lambda_0 = lambda + 2 * tolerance;
@@ -363,7 +363,7 @@ int main( int argc, char* argv[] )
 
 	long k = 0;
 	while ((std::abs(lambda - lambda_0) >= tolerance) && k <= numIterations)
-	{	
+	{
 		mat_vec_mult( yLocal, a, numLocalRows, cols, x); // compute next eigenvector estimate
 
 		MPI_Allgatherv( yLocal, numLocalRows, MPI_DOUBLE, yGlobal, recvcounts, displs, MPI_DOUBLE, MPI_COMM_WORLD);
@@ -378,8 +378,8 @@ int main( int argc, char* argv[] )
 	double executionTime = endTime - startTime;
 
 	double totalTime = MPI_Wtime() - startTotalTime;
-	
-	if (rank == 0) 
+
+	if (rank == 0)
 	{
 		printf("\nDominant eigenvalue: %f\nRead Time: %f\nNumber of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
 		printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %d\n\n", number_of_processes, totalTime, (number_of_processes + 0.0) * totalTime, executionTime / (k + 0.0));

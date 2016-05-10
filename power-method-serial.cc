@@ -84,7 +84,7 @@ void vec_vec_mult( double* c, double* a, int rows, double* b)
 	for (i = 0; i < rows; i++)
 	{
 		sum += a[i] * b[i];
-	}	
+	}
     *c = sum + 0.0;
 }
 
@@ -101,8 +101,8 @@ void normalize( double* c, double* a, int rows )
     for (int i = 0; i < rows; i++)
 	{
 		c[i] = a[i] / sqrt(magnitude);
-    }		
-} 
+    }
+}
 
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
@@ -111,7 +111,7 @@ void normalize( double* c, double* a, int rows )
 int main( int argc, char* argv[] )
 {
 	double tolerance = pow(10, -6.0); // default value
-    long numIterations = 500; // default value	
+    long numIterations = 500; // default value
 
     double* a;             // pointer to matrix data
     hid_t file_id;         // HDF5 id for file
@@ -158,7 +158,7 @@ int main( int argc, char* argv[] )
 	//----------------------------------------------------------------------------//
 
 	double startTime = MPI_Wtime();
-	
+
     // Open existing HDF5 file
     file_id = H5Fopen( filename, H5F_ACC_RDONLY, H5P_DEFAULT );
     if ( file_id < 0 ) exit( EXIT_FAILURE );
@@ -198,14 +198,12 @@ int main( int argc, char* argv[] )
     CHKERR( H5Fclose( file_id ), "H5Fclose()" );
 
 	double endTime = MPI_Wtime();
-	double time = endTime - startTime;
+	double readTime = endTime - startTime;
+
+    startTime = endTime;
 
 
 
-    // Display Matrix
-    dumpMatrix( a, dims[0], dims[1], dims[1]  );
-
-	
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
 
@@ -220,9 +218,9 @@ int main( int argc, char* argv[] )
 
 	//normalize x (based on placeholder y)
 	normalize( x, y, cols );
-	
+
 	// initialized to any value
-	double lambda = 0.0; 
+	double lambda = 0.0;
 
 	// make sure |lambda-lambda_0| > tolerance
 	double lambda_0 = lambda + 2 * tolerance;
@@ -237,7 +235,11 @@ int main( int argc, char* argv[] )
 		k++;
 	}
 
-	printf("Dominant Eigenvalue: %f, Time: %f value of k: %ld\n", lambda, time, k);
+    double executionTime = MPI_Wtime() - startTime;
+
+	printf("\nDominant Eigenvalue: %f\nRead Time: %f\nNumber Of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
+    printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %f\n\n", 1, readTime + executionTime, readTime + executionTime, executionTime / (k + 0.0));
+
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
 

@@ -1,0 +1,394 @@
+// $Smake: mpic++ -Wall -O2 -o %F %f -lhdf5
+//
+// HDF5 Parallel Read Example
+//
+// Opens an HDF5 file, determines the matrix dimensions and what block of
+// the matrix this process should load, allocates memory for the matrix
+// block, and reads the block from the file.
+//
+// NOTE:
+// This program assumes the simplest case: the number of rows in the matrix
+// is a multiple of the number of processes so each process will be assigned
+// the same number of rows.
+
+#include <cstdio>
+#include <cstdlib>
+#include <hdf5.h>
+#include <mpi.h>
+#include <cmath>
+#include <unistd.h>
+
+/// Check return values from HDF5 routines
+#define CHKERR(status,name) if ( status < 0 ) \
+     fprintf( stderr, "Error: nonzero status (%d) in %s\n", status, name )
+
+// Compute index into single linear array for matrix element (i,j)
+#define IDX(i,j,stride) ((i)*(stride)+(j)) // row major (c/c++ ordering)
+
+//----------------------------------------------------------------------------
+// Display matrix values on standard output
+
+void dumpMatrix(
+    int rank,       // in  - rank of calling process
+    double* a,      // in  - address of matrix data
+    int rows,       // in  - number of rows in matrix
+    int cols,       // in  - number of cols in matrix
+    int stride      // in  - row length in memory (assuming C/C++ storage)
+    )
+{
+    printf( "Rank %d:\n", rank );
+    for ( int i = 0; i < rows; i++ )
+    {
+        for ( int j = 0; j < cols; j++ )
+        {
+            printf( " %8.2f", a[IDX(i,j,stride)] );
+        }
+        printf( "\n" );
+    }
+    printf( "\n" );
+    fflush( stdout );
+}
+
+
+//----------------------------------------------------------------------------//
+//----------------------------------------------------------------------------//
+//					MATRIX OPERATIONS										  //
+//----------------------------------------------------------------------------//
+//----------------------------------------------------------------------------//
+
+/*			- 					tested
+ * Form vector product result = Ab
+ * @param1 double* vector result
+ * @param2 double* matrix to multiply
+ * @param3 int number of rows in matrix
+ * @param4 int number of columns in matrix
+ * @param5 double* vector to multiply
+*/
+void mat_vec_mult( double* result, double* A, int rows, int cols, double* b)
+{
+    int i, j;
+	for ( i = 0; i < rows; i++)
+	{
+		result[i] = 0;
+		for ( j = 0; j < cols; j++ )
+		{
+			result[i] += A[i * cols + j] * b[j];
+		}
+	}
+}
+
+/*
+ * Form int product c = a^T * b  -  tested
+*/
+void vec_vec_mult( double* c, double* a, int rows, double* b)
+{
+	double sum = 0.0;
+    int i;
+	for (i = 0; i < rows; i++)
+	{
+		sum += a[i] * b[i];
+	}	
+    *c = sum + 0.0;
+}
+
+/*
+ * Form vector quotient c = a/||a||  -   tested
+*/
+void normalize( double* c, double* a, int rows )
+{
+	double magnitude = 0.0;
+    for (int i = 0; i < rows; i++)
+	{
+		magnitude += pow(a[i], 2.0);
+	}
+    for (int i = 0; i < rows; i++)
+	{
+		c[i] = a[i] / sqrt(magnitude);
+    }		
+} 
+
+
+/*
+* Computes  the  starting  and  ending  displacements  for the ith
+* subinterval  in an n-element  array  given  that  there  are m
+* subintervals  of  approximately  equal  size.
+*
+* Input:
+*     int n     - length  of array (array  indexed  [0]..[n-1])
+*     int m     - number  of  subintervals
+*     int i     - subinterval  number
+*
+* Output:
+*     int* s    - location  to store  subinterval  starting  index
+*     int* e    - location  to store  subinterval  ending  index
+*
+* Suppose  we want to  partition a 100- element  array  into 3
+* subintervals  of  roughly  the  same  size.   The  following  three
+* pairs  of calls  find  the  starting  and  ending  indices  of each
+* subinterval:
+*    decompose1d( 100, 3, 0, &s, &e );   (now s =   0, e = 33)
+*    decompose1d( 100, 3, 1, &s, &e );   (now s = 34, e = 66)
+*    decompose1d( 100, 3, 2, &s, &e );   (now s = 67, e = 99)
+*
+* The  subinterval  length  can be  computed  with *e - *s + 1.
+*
+* Based  on the  FORTRAN  subroutine  MPE_DECOMP1D  in the  file
+* UsingMPI/intermediate/decomp.f supplied  with  the  book
+* "Using  MPI" by Gropp  et al.   It has  been  adapted  to use
+* 0-based  indexing.
+*/
+void decompose1d( int n, int m, int i, int* s, int* e )
+{
+	const int length   = n / m;
+	const  int  deficit = n % m;
+	*s =   i * length + ( i < deficit ? i : deficit  );
+	*e = *s + length  - ( i < deficit ? 0 : 1 );
+	if ( ( *e >= n ) || ( i == m - 1 ) ) *e = n - 1;
+}
+
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+	//					MAIN
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+
+int main( int argc, char* argv[] )
+{
+	double startTotalTime = MPI_Wtime();
+
+
+	double tolerance = pow(10, -6.0); 	// default value
+    long numIterations = 500; 			// default value	
+
+    double* a;             // pointer to matrix data
+    int rows;              // number of rows in matrix
+    int cols;              // number of columns in matrix
+    hid_t plist_id;        // HDF5 id for property list
+    hid_t file_id;         // HDF5 id for file
+    hid_t dataspace_id;    // HDF5 id for dataspace in file
+    hid_t dataset_id;      // HDF5 id for dataset in file
+    hid_t memspace_id;     // HDF5 id for dataset in memory
+    hsize_t* dims;         // matrix dimensions; converted to block dims
+    hsize_t* offset;       // offsets in each dimension to start of block
+    herr_t status;         // HDF5 return code
+    int ndim;              // number of dimensions in HDF5 dataset
+    int number_of_processes;
+    int rank;
+
+    // Initialize MPI
+    MPI_Init( &argc, &argv );
+    MPI_Comm_size( MPI_COMM_WORLD, &number_of_processes );
+    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+	//					Process Command Line									  //
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+	
+	int c;
+
+    const char* filename = argv[1];
+    const char* path = "/A/value";
+
+    // check for switches
+    while ( ( c = getopt( argc, argv, "e:m:" ) ) != -1 )
+	{
+	    switch( c )
+		{
+		case 'e':
+		    tolerance = atof(optarg);
+		    break;
+		case 'm':
+		    numIterations = atol( optarg );
+	    	if ( numIterations <= 0 )
+			{
+			    fprintf( stderr, "number of iterations must be positive\n" );
+			    fprintf( stderr, "got: %ld\n", numIterations );
+			    exit( EXIT_FAILURE );
+			}
+		    break;
+		default:
+		    fprintf( stderr, "default usage: %s [-n NUM_SAMPLES]\n", argv[0] );
+		    return EXIT_FAILURE;
+		}
+	}
+
+
+
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+	//					READ MATRIX     										  //
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+
+	double startReadTime = MPI_Wtime();
+
+    // Create property list from MPI communicator
+    plist_id = H5Pcreate( H5P_FILE_ACCESS );
+    if ( plist_id < 0 ) exit( EXIT_FAILURE );
+    //status = H5Pset_fapl_mpio( plist_id, MPI_COMM_WORLD, MPI_INFO_NULL );
+    //CHKERR( status, "H5Pset_fapl_mpio()" );
+
+    // Open existing shared file using property list
+    file_id = H5Fopen( filename, H5F_ACC_RDONLY, plist_id );
+    if ( file_id < 0 ) exit( EXIT_FAILURE );
+    H5Pclose( plist_id );
+
+    // Open dataset in file
+    dataset_id = H5Dopen( file_id, path, H5P_DEFAULT );
+    if ( dataset_id < 0 ) exit( EXIT_FAILURE );
+
+    // Determine dataset parameters
+    dataspace_id = H5Dget_space( dataset_id );
+    ndim = H5Sget_simple_extent_ndims( dataspace_id );
+    dims   = new hsize_t [ndim];
+    offset = new hsize_t [ndim];
+
+    // Get dimensions for dataset
+    ndim = H5Sget_simple_extent_dims( dataspace_id, dims, NULL );
+    if ( ndim != 2 )
+    {
+        if ( rank == 0 )
+        {
+            fprintf( stderr, "Expected dataspace to be 2-dimensional " );
+            fprintf( stderr, "but it appears to be %d-dimensional\n", ndim );
+        }
+        exit( EXIT_FAILURE );
+    }
+    rows = dims[0];
+    cols = dims[1];
+
+    // Determine the number of rows for each process; store in dims[] array
+    // which is needed to specify memory space dimensions
+
+    dims[0] = rows / number_of_processes;
+	int remainder = rows % number_of_processes;
+	if (rank < remainder) dims[0]++;
+
+    // Create memory dataspace
+    memspace_id = H5Screate_simple( ndim, dims, NULL );
+    if ( memspace_id < 0 ) exit( EXIT_FAILURE );
+
+
+	/* Input:
+	*     int n     - length  of array (array  indexed  [0]..[n-1])
+	*     int m     - number  of  subintervals
+	*     int i     - subinterval  number
+	*
+	* Output:
+	*     int* s    - location  to store  subinterval  starting  index
+	*     int* e    - location  to store  subinterval  ending  index
+	*/
+	
+	int startingIndex;
+	int endingIndex;
+	decompose1d( rows, number_of_processes, rank, &startingIndex , &endingIndex );
+
+    // Define hyperslab in file dataspace to correspond to memory dataspace
+    offset[0] = startingIndex; // index in matrix of first row in our block
+    offset[1] = 0;              // index in matrix of first col in our block
+    status = H5Sselect_hyperslab( dataspace_id, H5S_SELECT_SET, offset,
+                                  NULL, dims, NULL );
+    CHKERR( status, "H5Sselect_hyperslab()" );
+
+    // Set transfer mode to be collective
+    plist_id = H5Pcreate( H5P_DATASET_XFER );
+    if ( plist_id < 0 ) exit( EXIT_FAILURE );
+
+    //status = H5Pset_dxpl_mpio( plist_id, H5FD_MPIO_COLLECTIVE );
+    //CHKERR( status, "H5Pset_dxpl_mpio()" );
+
+    // Allocate memory for portion of matrix and read data from file
+    a = new double [dims[0] * dims[1]];
+    status = H5Dread( dataset_id, H5T_NATIVE_DOUBLE, memspace_id,
+                      dataspace_id, plist_id, a );
+    CHKERR( status, "H5Dread()" );
+
+    // Close all remaining HDF5 objects
+    CHKERR( H5Pclose( plist_id ), "H5Pclose()" );
+    CHKERR( H5Sclose( memspace_id ), "H5Sclose()" );
+    CHKERR( H5Dclose( dataset_id ), "H5Dclose()" );
+    CHKERR( H5Sclose( dataspace_id ), "H5Sclose()" );
+    CHKERR( H5Fclose( file_id ), "H5Fclose()" );
+
+	double endReadTime = MPI_Wtime();
+	double readTime = endReadTime - startReadTime;
+
+	double startTime = MPI_Wtime();
+	
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+	//					Variables for Power method								  //
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+
+	int numLocalRows = dims[0];
+	double x [rows]; // corresponding normalized eigenvector
+    double yLocal [numLocalRows]; // placeholder
+	double yGlobal [rows];
+
+
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+	//					Power Algorithm											  //
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+
+
+	//initial eigenvector estimate (using y as a placeholder)
+	for ( int i = 0; i < rows; i++) yGlobal[i] = 1.0;
+
+	for ( int i = 0; i < numLocalRows; i++ ) yLocal[i] = yGlobal[offset[0] + i];
+		
+	//normalize x (based on placeholder y)
+	normalize( x, yGlobal, rows );
+	
+	// initialized to any value
+	double lambda = 0.0; 
+
+	// make sure |lambda-lambda_0| > tolerance
+	double lambda_0 = lambda + 2 * tolerance;
+
+	int recvcounts[number_of_processes];
+	int displs[number_of_processes];
+
+	MPI_Allgather(&numLocalRows, 1, MPI_INT, recvcounts, 1, MPI_INT, MPI_COMM_WORLD);
+
+	MPI_Allgather(&startingIndex, 1, MPI_INT, displs, 1, MPI_INT, MPI_COMM_WORLD);
+
+
+	long k = 0;
+	while ((std::abs(lambda - lambda_0) >= tolerance) && k <= numIterations)
+	{	
+		mat_vec_mult( yLocal, a, numLocalRows, cols, x); // compute next eigenvector estimate
+
+		MPI_Allgatherv( yLocal, numLocalRows, MPI_DOUBLE, yGlobal, recvcounts, displs, MPI_DOUBLE, MPI_COMM_WORLD);
+
+		lambda_0 = lambda; 						      	// previous eigenvalue estimate
+ 		vec_vec_mult( &lambda, x, cols, yGlobal );    			// compute new estimate
+		normalize( x, yGlobal, cols );						// normalize eigenvector estimate
+		k++;
+	}
+
+	double endTime = MPI_Wtime();
+	double executionTime = endTime - startTime;
+
+	double totalTime = MPI_Wtime() - startTotalTime;
+	
+	if (rank == 0) 
+	{
+		printf("\nDominant eigenvalue: %f\nRead Time: %f\nNumber of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
+		printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %d\n\n", number_of_processes, totalTime, (number_of_processes + 0.0) * totalTime, executionTime / (k + 0.0));
+	}
+
+
+    // Clean up and quit
+    delete [] a;
+    delete [] dims;
+    delete [] offset;
+    MPI_Finalize();
+}

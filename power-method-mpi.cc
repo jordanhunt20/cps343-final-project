@@ -369,6 +369,7 @@ int main( int argc, char* argv[] )
 		MPI_Allgatherv( yLocal, numLocalRows, MPI_DOUBLE, yGlobal, recvcounts, displs, MPI_DOUBLE, MPI_COMM_WORLD);
 
 		lambda_0 = lambda; 						      	// previous eigenvalue estimate
+		printf("\nlambda0: %f\nlambda: %f\n\n", lambda0, lambda)
  		vec_vec_mult( &lambda, x, cols, yGlobal );    			// compute new estimate
 		normalize( x, yGlobal, cols );						// normalize eigenvector estimate
 		k++;
@@ -382,7 +383,7 @@ int main( int argc, char* argv[] )
 	if (rank == 0)
 	{
 		printf("\nDominant eigenvalue: %f\nRead Time: %f\nNumber of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
-		printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %d\n\n", number_of_processes, totalTime, (number_of_processes + 0.0) * totalTime, executionTime / (k + 0.0));
+		printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %f\n\n", number_of_processes, totalTime, (number_of_processes + 0.0) * totalTime, executionTime / (k + 0.0));
 	}
 
 

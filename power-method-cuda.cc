@@ -1,10 +1,9 @@
 /*
- * $Smake: nvcc -O2 -o %F %f wtime.c -I ../include -lhdf5
+ * $Smake: gcc -Wall -O2 -o %F %f -lhdf5
  *
  * Matrix-matrix product
  */
 
-#include <cuda.h>
 #include <hdf5.h>
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +13,7 @@
 #include <time.h>
 #include <cblas.h>
 #include <cmath>
-#include "wtime.h"
+#include <cuda.h>
 
 
 
@@ -57,24 +56,25 @@ void dumpMatrix(
  * Form vector product result = Ab
  * @param1 double* vector result
  * @param2 double* matrix to multiply
- * @param3 double* vector to multiply
- * @param4 int number of rows in matrix
- */
- __global__ void mat_vec_mult(double* result, double* A, double* b, int numRows)
- {
-     int row = blockIdx.y * blockDim.y + threadIdx.y;
-     int col = blockIdx.x * blockDim.x + threadIdx.x;
-     double sum = 0.0f;
-     int tid=threadIdx.x+blockIdx.x*blockDim.x;
-     if (tid < numRows) {
-         for (int i = 0; i < numRows; i++) {
-             sum += A[i * numRows + tid] * b[i];
-         }
-         result[row * numRows + col] = sum;
-     }
- }
+ * @param3 int number of rows in matrix
+ * @param4 int number of columns in matrix
+ * @param5 double* vector to multiply
+*/
+void mat_vec_mult( double* result, double* A, int rows, int cols, double* b)
+{
+    int i, j;
+	for ( i = 0; i < rows; i++)
+	{
+		double temp = 0.0;
+		for ( j = 0; j < cols; j++ )
+		{
+			temp += A[i * cols + j] * b[j];
+		}
+		result[i] = temp;
+	}
+}
 
- /*
+/*
  * Form int product c = a^T * b  -  tested
 */
 void vec_vec_mult( double* c, double* a, int rows, double* b)
@@ -157,7 +157,7 @@ int main( int argc, char* argv[] )
 	//----------------------------------------------------------------------------//
 	//----------------------------------------------------------------------------//
 
-	double startTime = wtime();
+	double startTime = MPI_Wtime();
 
     // Open existing HDF5 file
     file_id = H5Fopen( filename, H5F_ACC_RDONLY, H5P_DEFAULT );
@@ -197,7 +197,7 @@ int main( int argc, char* argv[] )
     CHKERR( H5Sclose( dataspace_id ), "H5Sclose()" );
     CHKERR( H5Fclose( file_id ), "H5Fclose()" );
 
-	double endTime = wtime();
+	double endTime = MPI_Wtime();
 	double readTime = endTime - startTime;
 
     startTime = endTime;
@@ -207,69 +207,35 @@ int main( int argc, char* argv[] )
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
 
-
-
     // Power Method Algorithm
 	int cols = (int) dims[0];
     double x [cols]; // corresponding normalized eigenvector
     double y [cols]; // placeholder
 
-    //initial eigenvector estimate (using y as a placeholder)
-    for ( int i = 0; i < cols; i++) y[i] = 1.0;
 
-    //normalize x (based on placeholder y)
-    normalize( x, y, cols );
+	//initial eigenvector estimate (using y as a placeholder)
+	for ( int i = 0; i < cols; i++) y[i] = 1.0;
 
+	//normalize x (based on placeholder y)
+	normalize( x, y, cols );
 
-        // initialized to any value
-        double lambda = 0.0;
+	// initialized to any value
+	double lambda = 0.0;
 
-        // make sure |lambda-lambda_0| > tolerance
-        double lambda_0 = lambda + 2 * tolerance;
-
-    // determine matrix size in bytes
-    size_t matrix_size = cols * cols * sizeof(double);
-
-    // determine vector size in bytes
-    size_t vector_size = cols * sizeof(double);
-
-    // set block size and number of blocks
-    dim3 block_size( 16, 16 );
-  	dim3 num_blocks( ( cols - 1 + block_size.x ) / block_size.x,
-                   ( cols - 1 + block_size.y ) / block_size.y );
-
-    // declare pointers to matrix and vectors in device memory and allocate memory
-    double *a_d, *x_d, *y_d;
-    cudaMalloc( (void**) &a_d, matrix_size ); // matrix
-    cudaMalloc((void**) &x_d, vector_size); // eigenvalue
-    cudaMalloc((void**) &y_d, vector_size); // placeholder
-
-    // set a_d to matrix a, and copy it to device
-    cudaMemcpy(a_d, a, matrix_size, cudaMemcpyHostToDevice);
-    cudaMemcpy( x_d, x, vector_size, cudaMemcpyHostToDevice );
-    cudaMemcpy( y_d, y, vector_size, cudaMemcpyHostToDevice );
-
-    //__global__ void mat_vec_mult(double* result, double* A, double* b, int rows)
+	// make sure |lambda-lambda_0| > tolerance
+	double lambda_0 = lambda + 2 * tolerance;
 
     long k = 0;
 	while ((std::abs(lambda - lambda_0) >= tolerance) && k <= numIterations)
 	{
-         // compute next eigenvector estimate on device
-        mat_vec_mult<<< num_blocks, block_size >>>(y_d, a_d, x_d, cols);
-
-        // retrieve result from device and store on host
-        cudaMemcpy(y, y_d, vector_size, cudaMemcpyDeviceToHost);
-
+		mat_vec_mult( y, a, cols, cols, x); 	  		// compute next eigenvector estimate
 		lambda_0 = lambda; 						      	// previous eigenvalue estimate
- 		vec_vec_mult(&lambda, x, cols, y);    			// compute new estimate
+ 		vec_vec_mult( &lambda, x, cols, y);    			// compute new estimate
 		normalize( x, y, cols );						// normalize eigenvector estimate
-
-        // copy x from host to device
-        cudaMemcpy( x_d, x, vector_size, cudaMemcpyHostToDevice );                                      // set eigenvector on device to new value
 		k++;
 	}
 
-    double executionTime = wtime() - startTime;
+    double executionTime = MPI_Wtime() - startTime;
 
 	printf("\nDominant Eigenvalue: %f\nRead Time: %f\nNumber Of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
     printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %f\n\n", 1, readTime + executionTime, readTime + executionTime, executionTime / (k + 0.0));

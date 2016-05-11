@@ -275,10 +275,11 @@ int main(int argc, char* argv[])
 
         // retrieve result from device and store on host
         cudaMemcpy(y, y_d, vector_size, cudaMemcpyDeviceToHost);
-
+        // for(int i = 0; i < cols/2; i++)
+        //     std::cout << y[i] << std::endl;
 		lambda_0 = lambda; 						      	// previous eigenvalue estimate
  		vec_vec_mult(&lambda, x, cols, y);    			// compute new estimate
-		normalize(x, y, cols);						    // normalize eigenvector estimate
+		normalize(x, y, cols);						// normalize eigenvector estimate
 
         // copy x from host to device
         cudaMemcpy(x_d, x, vector_size, cudaMemcpyHostToDevice);

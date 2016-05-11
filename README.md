@@ -1,2 +1,2 @@
 # cps343-final-project
-Parallel Image Editor
+Power Method Project redone in CUDA

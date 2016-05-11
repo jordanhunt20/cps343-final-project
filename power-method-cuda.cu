@@ -130,34 +130,45 @@ int main( int argc, char* argv[] )
     const char* filename = argv[1];
     const char* path = "/A/value";
 
+    bool quiet = false;
+
     // check for switches
-    while ( ( c = getopt( argc, argv, "e:m:s:" ) ) != -1 )
+    while ( ( c = getopt( argc, argv, "e:m:s:q" ) ) != -1 )
 	{
 	    switch( c )
 		{
 		case 'e':
 		    tolerance = atof(optarg);
+            if (tolerance <= 0)
+            {
+                fprintf(stderr, "tolerance must be positive\n");
+                fprintf(stderr, "got: %f\n", tolerance);
+                exit(EXIT_FAILURE);
+            }
 		    break;
 		case 'm':
-		    numIterations = atol( optarg );
-	    	if ( numIterations <= 0 )
+		    numIterations = atol(optarg);
+	    	if (numIterations <= 0)
 			{
-			    fprintf( stderr, "number of iterations must be positive\n" );
-			    fprintf( stderr, "got: %ld\n", numIterations );
-			    exit( EXIT_FAILURE );
+			    fprintf(stderr, "number of iterations must be positive\n");
+			    fprintf(stderr, "got: %ld\n", numIterations);
+			    exit(EXIT_FAILURE);
 			}
 		    break;
         case 's':
             blockSize = atol( optarg );
             if ( blockSize <= 0 )
             {
-                fprintf( stderr, "block size must be positive\n" );
-                fprintf( stderr, "got: %ld\n", blockSize );
-                exit( EXIT_FAILURE );
+                fprintf(stderr, "block size must be positive\n");
+                fprintf(stderr, "got: %ld\n", blockSize);
+                exit(EXIT_FAILURE);
             }
             break;
+        case 'q':
+            quiet = true;
+            break;
 		default:
-		    fprintf( stderr, "default usage: %s [-n NUM_SAMPLES]\n", argv[0] );
+		    fprintf(stderr, "default usage: %s [-e tolerance, -m numIterations -s blockSize, -q]\n", argv[0]);
 		    return EXIT_FAILURE;
 		}
 	}
@@ -193,20 +204,20 @@ int main( int argc, char* argv[] )
     }
 
     // Create memory dataspace
-    memspace_id = H5Screate_simple( ndim, dims, NULL );
-    if ( memspace_id < 0 ) exit( EXIT_FAILURE );
+    memspace_id = H5Screate_simple(ndim, dims, NULL);
+    if (memspace_id < 0) exit(EXIT_FAILURE);
 
     // Allocate memory for matrix and read data from file
-    a = new double [dims[0] * dims[1]];
-    status = H5Dread( dataset_id, H5T_NATIVE_DOUBLE, memspace_id,
-                      dataspace_id, H5P_DEFAULT, a );
-    CHKERR( status, "H5Dread()" );
+    a = new double [dims[0] * dims[0]];
+    status = H5Dread(dataset_id, H5T_NATIVE_DOUBLE, memspace_id,
+                      dataspace_id, H5P_DEFAULT, a);
+    CHKERR(status, "H5Dread()");
 
     // Close all remaining HDF5 objects
-    CHKERR( H5Sclose( memspace_id ), "H5Sclose()" );
-    CHKERR( H5Dclose( dataset_id ), "H5Dclose()" );
-    CHKERR( H5Sclose( dataspace_id ), "H5Sclose()" );
-    CHKERR( H5Fclose( file_id ), "H5Fclose()" );
+    CHKERR(H5Sclose(memspace_id), "H5Sclose()");
+    CHKERR(H5Dclose(dataset_id), "H5Dclose()");
+    CHKERR(H5Sclose(dataspace_id), "H5Sclose()");
+    CHKERR(H5Fclose(file_id), "H5Fclose()");
 
 	double endTime = wtime();
 	double readTime = endTime - startTime;
@@ -222,7 +233,7 @@ int main( int argc, char* argv[] )
     double y [cols]; // placeholder
 
     //initial eigenvector estimate (using y as a placeholder)
-    for ( int i = 0; i < cols; i++) y[i] = 2.0;
+    for ( int i = 0; i < cols; i++) y[i] = 1.0;
 
     //normalize x (based on placeholder y)
     normalize(x, y, cols);
@@ -259,28 +270,30 @@ int main( int argc, char* argv[] )
 	{
          // compute next eigenvector estimate on device
         mat_vec_mult<<< num_blocks, block_size >>>(y_d, a_d, x_d, cols);
-        
+
         // retrieve result from device and store on host
         cudaMemcpy(y, y_d, vector_size, cudaMemcpyDeviceToHost);
         // for(int i = 0; i < cols/2; i++)
         //     std::cout << y[i] << std::endl;
 		lambda_0 = lambda; 						      	// previous eigenvalue estimate
  		vec_vec_mult(&lambda, x, cols, y);    			// compute new estimate
-		normalize( x, y, cols );						// normalize eigenvector estimate
+		normalize(x, y, cols );						// normalize eigenvector estimate
 
         // copy x from host to device
-        cudaMemcpy( x_d, x, vector_size, cudaMemcpyHostToDevice );
+        cudaMemcpy(x_d, x, vector_size, cudaMemcpyHostToDevice);
 		k++;
 	}
 
     double executionTime = wtime() - startTime;
 
-	printf("\nDominant Eigenvalue: %f\nRead Time: %f\nNumber Of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
-    printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %f\n\n", 1, readTime + executionTime, readTime + executionTime, executionTime / (k + 0.0));
-
+    if (quiet) {
+        printf("\n%f %ld %f\n", lambda, k, readTime + executionTime);
+    } else {
+        printf("\nDominant Eigenvalue: %f\nRead Time: %f\nNumber Of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
+        printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %f\n\n", 1, readTime + executionTime, readTime + executionTime, executionTime / (k + 0.0));
+    }
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
-
     // Clean up and quit
     delete [] a;
     delete [] dims;

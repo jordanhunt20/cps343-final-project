@@ -54,7 +54,7 @@ void dumpMatrix(
 //----------------------------------------------------------------------------//
 //----------------------------------------------------------------------------//
 
-/*			- 					tested
+/*
  * Form vector product result = Ab
  * @param1 double* vector result
  * @param2 double* matrix to multiply
@@ -64,16 +64,15 @@ void dumpMatrix(
  __global__ void mat_vec_mult(double* result, double* A, double* b, int numRows)
  {
      int row = blockIdx.y * blockDim.y + threadIdx.y;
-     int col = blockIdx.x * blockDim.x + threadIdx.x;
-     double sum = 0.0;
-     int tid = threadIdx.x + blockIdx.x * blockDim.x;
-     if (tid < numRows * numRows) 
+     int col = blockIdx.x * blockDim.x + threadIdx.x;    
+     if (col < numRows && row < numRows) 
      {
-         for (int i = 0; i < numRows; i++) 
+		 double sum = 0.0;
+         for (int i = 0; i < numRows; i++)
 		 {
-             sum += A[i * numRows + tid] * b[i];
+             sum += A[col * numRows + i] * b[i];
          }
-         result[row * numRows + col] = sum;
+         result[col] = sum;
      }
  }
 
@@ -113,9 +112,14 @@ void normalize(double* c, double* a, int rows)
 
 int main(int argc, char* argv[])
 {
-	double tolerance = pow(10, -6.0); // default value
-    long numIterations = 500; // default value
-    long blockSize = 16; // default value
+	// default values for command line options
+	double tolerance = pow(10, -6.0);
+    long numIterations = 500;
+    long blockSize = 16;
+	bool quiet = false;
+
+    const char* filename = argv[1];
+    const char* path = "/A/value";
 
     double* a;             // pointer to matrix data
     hid_t file_id;         // HDF5 id for file
@@ -128,11 +132,6 @@ int main(int argc, char* argv[])
 
 	// Process command line
 	int c;
-
-    const char* filename = argv[1];
-    const char* path = "/A/value";
-
-    bool quiet = false;
 
     // check for switches
     while ((c = getopt(argc, argv, "e:m:s:q")) != -1)

@@ -49,6 +49,56 @@ void dumpMatrix(
     fflush( stdout );
 }
 
+//----------------------------------------------------------------------------
+// Sum reduction.
+//
+// Based on reduce3<T>() and reduce4<T>() in CUDA SDK samples package:
+// samples/6_Advanced/reduction/reduction_kernel.cu
+
+template <typename T>
+__global__ void rSum( T* idata, T* odata, unsigned int n )
+{
+    extern __shared__ T sdata[];
+    const unsigned int i = blockIdx.x * ( blockDim.x * 2 ) + threadIdx.x;
+
+    // Perform first level of reduction during load from global memory
+    sdata[threadIdx.x] = ( i < n ? idata[i] : 0 )
+        + ( i + blockDim.x < n ? idata[i + blockDim.x] : 0 );
+    __syncthreads();
+
+    // Perform remaining sums using sequential addressing
+    const unsigned int minS = ( blockDim.x >= 64 ? 32 : 0 );
+    for ( unsigned int s = blockDim.x / 2; s > minS; s >>= 1 )
+    {
+        if ( threadIdx.x < s ) sdata[threadIdx.x] += sdata[threadIdx.x + s];
+        __syncthreads();
+    }
+
+    // Unroll last six iterations when only single warp is executing
+    // Not done if block size is less than 64, in which case minS == 32
+    if ( minS > 0 && threadIdx.x < 32 )
+    {
+        // We want to access shared memory without __syncthreads()
+        // between accesses (ok because we are a single warp).  Normal
+        // CUDA optimization will use registers to hold shared memory
+        // values if it appears that only a single thread is doing the
+        // accessing.  Since we don't want this to happen we use a
+        // "volatile" pointer to force CUDA to disable this
+        // optimization.  Testing shows that loop overhead is very small
+        // so the following __could__ be replaced by a loop if desired.
+        volatile T* smem = sdata;
+        smem[threadIdx.x] += smem[threadIdx.x + 32];
+        smem[threadIdx.x] += smem[threadIdx.x + 16];
+        smem[threadIdx.x] += smem[threadIdx.x +  8];
+        smem[threadIdx.x] += smem[threadIdx.x +  4];
+        smem[threadIdx.x] += smem[threadIdx.x +  2];
+        smem[threadIdx.x] += smem[threadIdx.x +  1];
+    }
+
+    // Save final value from block in global memory
+    if ( threadIdx.x == 0 ) odata[blockIdx.x] = sdata[0];
+}
+
 
 //----------------------------------------------------------------------------//
 //----------------------------------------------------------------------------//
@@ -369,6 +419,7 @@ int main( int argc, char* argv[] )
 		MPI_Allgatherv( yLocal, numLocalRows, MPI_DOUBLE, yGlobal, recvcounts, displs, MPI_DOUBLE, MPI_COMM_WORLD);
 
 		lambda_0 = lambda; 						      	// previous eigenvalue estimate
+		printf("\nlambda0: %f\nlambda: %f\n\n", lambda0, lambda)
  		vec_vec_mult( &lambda, x, cols, yGlobal );    			// compute new estimate
 		normalize( x, yGlobal, cols );						// normalize eigenvector estimate
 		k++;

@@ -61,18 +61,17 @@ void dumpMatrix(
  * @param3 double* vector to multiply
  * @param4 int number of rows in matrix
  */
- __global__ void mat_vec_mult(double* result, double* A, double* b, int numRows)
+ __global__ void mat_vec_mult(double* result, double* A, double* b, int n)
  {
-     int row = blockIdx.y * blockDim.y + threadIdx.y;
-     int col = blockIdx.x * blockDim.x + threadIdx.x;    
-     if (col < numRows && row < numRows) 
+     int row = blockIdx.x * blockDim.x + threadIdx.x;
+     if (row < n)
      {
 		 double sum = 0.0;
-         for (int i = 0; i < numRows; i++)
+         for (int i = 0; i < n; i++)
 		 {
-             sum += A[col * numRows + i] * b[i];
+             sum += A[row * n + i] * b[i];
          }
-         result[col] = sum;
+         result[row] = sum;
      }
  }
 
@@ -252,9 +251,8 @@ int main(int argc, char* argv[])
     size_t vector_size = cols * sizeof(double);
 
     // set block size and number of blocks
-    dim3 block_size(blockSize, blockSize);
-  	dim3 num_blocks((cols - 1 + block_size.x) / block_size.x,
-                   (cols - 1 + block_size.y) / block_size.y);
+    dim3 block_size(blockSize);
+  	dim3 num_blocks((cols - 1 + block_size.x) / block_size.x);
 
     // declare pointers to matrix and vectors in device memory and allocate memory
     double *a_d, *x_d, *y_d;
@@ -290,7 +288,7 @@ int main(int argc, char* argv[])
         printf("\n%f %ld %f\n", lambda, k, readTime + executionTime);
     } else {
         printf("\nDominant Eigenvalue: %f\nRead Time: %f\nNumber Of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
-        printf("Total Time: %f\nTime Per Loop: %f\n\n", readTime + executionTime, executionTime / (k + 0.0));
+        printf("Total Time: %f\nTime Per Loop: %f\nBlock Size: %ld\n\n", readTime + executionTime, executionTime / (k + 0.0), blockSize);
     }
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------

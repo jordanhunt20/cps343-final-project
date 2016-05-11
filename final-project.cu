@@ -1,0 +1,376 @@
+/*
+ * $Smake: nvcc -O2 -o %F %f wtime.c -I ../include -lhdf5
+ *
+ * Matrix-matrix product
+ */
+
+#include <cuda.h>
+#include <hdf5.h>
+#include <cstdio>
+#include <cstdlib>
+#include <unistd.h>
+#include <string.h>
+#include <math.h>
+#include <time.h>
+#include <cblas.h>
+#include <cmath>
+#include <iostream>
+#include "wtime.h"
+
+
+
+/// Check return values from HDF5 routines
+#define CHKERR(status,name) if ( status < 0 ) \
+     fprintf( stderr, "Error: nonzero status (%d) in %s\n", status, name )
+
+// Compute index into single linear array for matrix element (i,j)
+#define IDX(i,j,stride) ((i)*(stride)+(j)) // row major (c/c++ ordering)
+
+//----------------------------------------------------------------------------
+// Display matrix values on standard output
+
+void dumpMatrix(
+    double* a,      // in  - address of matrix data
+    int rows,       // in  - number of rows in matrix
+    int cols,       // in  - number of cols in matrix
+    int stride      // in  - row length in memory (assuming C/C++ storage)
+    )
+{
+    for (int i = 0; i < rows; i++)
+    {
+        for (int j = 0; j < cols; j++)
+        {
+            printf(" %8.2f", a[IDX(i,j,stride)]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+    fflush(stdout);
+}
+
+//----------------------------------------------------------------------------
+// Sum reduction.
+//
+// Based on reduce3<T>() and reduce4<T>() in CUDA SDK samples package:
+// samples/6_Advanced/reduction/reduction_kernel.cu
+
+template <typename T>
+__global__ void rSum( T* idata, T* odata, unsigned int n )
+{
+    extern __shared__ T sdata[];
+    const unsigned int i = blockIdx.x * ( blockDim.x * 2 ) + threadIdx.x;
+
+    // Perform first level of reduction during load from global memory
+    sdata[threadIdx.x] = ( i < n ? idata[i] : 0 )
+        + ( i + blockDim.x < n ? idata[i + blockDim.x] : 0 );
+    __syncthreads();
+
+    // Perform remaining sums using sequential addressing
+    const unsigned int minS = ( blockDim.x >= 64 ? 32 : 0 );
+    for ( unsigned int s = blockDim.x / 2; s > minS; s >>= 1 )
+    {
+        if ( threadIdx.x < s ) sdata[threadIdx.x] += sdata[threadIdx.x + s];
+        __syncthreads();
+    }
+    // Unroll last six iterations when only single warp is executing
+    // Not done if block size is less than 64, in which case minS == 32
+    if ( minS > 0 && threadIdx.x < 32 )
+    {
+        // We want to access shared memory without __syncthreads()
+        // between accesses (ok because we are a single warp).  Normal
+        // CUDA optimization will use registers to hold shared memory
+        // values if it appears that only a single thread is doing the
+        // accessing.  Since we don't want this to happen we use a
+        // "volatile" pointer to force CUDA to disable this
+        // optimization.  Testing shows that loop overhead is very small
+        // so the following __could__ be replaced by a loop if desired.
+        volatile T* smem = sdata;
+        smem[threadIdx.x] += smem[threadIdx.x + 32];
+        smem[threadIdx.x] += smem[threadIdx.x + 16];
+        smem[threadIdx.x] += smem[threadIdx.x +  8];
+        smem[threadIdx.x] += smem[threadIdx.x +  4];
+        smem[threadIdx.x] += smem[threadIdx.x +  2];
+        smem[threadIdx.x] += smem[threadIdx.x +  1];
+    }
+
+    // Save final value from block in global memory
+    if ( threadIdx.x == 0 ) odata[blockIdx.x] = sdata[0];
+}
+
+//----------------------------------------------------------------------------//
+//----------------------------------------------------------------------------//
+//					MATRIX OPERATIONS										  //
+//----------------------------------------------------------------------------//
+//----------------------------------------------------------------------------//
+
+/*
+ * Form vector product result = Ab
+ * @param1 double* vector result
+ * @param2 double* matrix to multiply
+ * @param3 double* vector to multiply
+ * @param4 int number of rows in matrix
+ */
+ __global__ void power_method(double* a_d, double* y_d, double* x_d, double* lambda_d, double lambda_0, int n, int numBlocks, int blockSize, double tolerance, long numIterations)
+ {
+	 int row = blockIdx.x * blockDim.x + threadIdx.x;
+	 if (row < n) 
+	 {
+		 const int numThreads = numBlocks * blockSize;
+    	 const size_t rbufSize = numBlocks * sizeof( double );
+    	 const size_t countSize = numThreads * sizeof( long );
+    	 const int smemSize = blockSize * sizeof( double );
+
+		 long k = 0;
+		 while ((std::abs(lambda_d - lambda_0) >= tolerance) && k <= numIterations)
+		 {
+			 // lambda_d
+			 double sum = 0.0;
+			 for (int i = 0; i < n; i++)
+			 {
+				 sum += a_d[row * n + i] * x_d[i];
+			 }
+			 y_d[row] = sum;
+			 lambda_0 = lambda_d;  // previous eigenvalue estimate
+
+			 __syncthreads();
+
+	 		 // lambda = x_d * y_d
+			 sum = 0.0;
+			 double magnitude = 0.0;
+			 int i;
+
+			 rSum<double><<<numBlocks, blockSize, smemSize>>>( x_d, y_d, sum );
+			 lambda_d = sum;
+
+			 // normalize eigenvector estimate
+			 double magnitude = 0.0;
+	 		 for (int i = 0; i < n; i++)
+		     {
+	 		 	 magnitude += pow(y_d[i], 2.0);
+	 		 }
+
+	 	 	 x_d[row] = y_d[row] / sqrt(magnitude);
+		 }
+	 }
+ }
+
+ /*
+ * Form int product c = a^T * b  -  tested
+*/
+__global__ void vec_vec_mult(double* c, double* a, int n, double* b)
+{
+	int row = blockIdx.x * blockDim.x + threadIdx.x;
+	if (row < n) 
+	{
+	double sum = 0.0;
+    int i;
+	for (i = 0; i < rows; i++)
+	{
+		sum += a[i] * b[i];
+	}
+    *c = sum + 0.0;
+}
+
+/*
+ * Form vector quotient c = a/||a||  -   tested
+*/
+void normalize(double* c, double* a, int rows)
+{
+	double magnitude = 0.0;
+    for (int i = 0; i < rows; i++)
+	{
+		magnitude += pow(a[i], 2.0);
+	}
+    for (int i = 0; i < rows; i++)
+	{
+		c[i] = a[i] / sqrt(magnitude);
+    }
+}
+
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+
+
+int main(int argc, char* argv[])
+{
+	// default values for command line options
+	double tolerance = pow(10, -6.0);
+    long numIterations = 500;
+    long blockSize = 16;
+	bool quiet = false;
+
+    const char* filename = argv[1];
+    const char* path = "/A/value";
+
+    double* a;             // pointer to matrix data
+    hid_t file_id;         // HDF5 id for file
+    hid_t dataspace_id;    // HDF5 id for dataspace in file
+    hid_t dataset_id;      // HDF5 id for dataset in file
+    hid_t memspace_id;     // HDF5 id for dataset in memory
+    hsize_t* dims;         // matrix dimensions
+    herr_t status;         // HDF5 return code
+    int ndim;              // number of dimensions in HDF5 dataset
+
+	// Process command line
+	int c;
+
+    // check for switches
+    while ((c = getopt(argc, argv, "e:m:s:q")) != -1)
+	{
+	    switch(c)
+		{
+		case 'e':
+		    tolerance = atof(optarg);
+            if (tolerance <= 0)
+            {
+                fprintf(stderr, "tolerance must be positive\n");
+                fprintf(stderr, "got: %f\n", tolerance);
+                exit(EXIT_FAILURE);
+            }
+		    break;
+		case 'm':
+		    numIterations = atol(optarg);
+	    	if (numIterations <= 0)
+			{
+			    fprintf(stderr, "number of iterations must be positive\n");
+			    fprintf(stderr, "got: %ld\n", numIterations);
+			    exit(EXIT_FAILURE);
+			}
+		    break;
+        case 's':
+            blockSize = atol(optarg);
+            if (blockSize <= 0)
+            {
+                fprintf(stderr, "block size must be positive\n");
+                fprintf(stderr, "got: %ld\n", blockSize);
+                exit(EXIT_FAILURE);
+            }
+            break;
+        case 'q':
+            quiet = true;
+            break;
+		default:
+		    fprintf(stderr, "default usage: %s [-e tolerance, -m numIterations -s blockSize, -q]\n", argv[0]);
+		    return EXIT_FAILURE;
+		}
+	}
+
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+	//					READ MATRIX     										  //
+	//----------------------------------------------------------------------------//
+	//----------------------------------------------------------------------------//
+
+	double startTime = wtime();
+
+    // Open existing HDF5 file
+    file_id = H5Fopen( filename, H5F_ACC_RDONLY, H5P_DEFAULT );
+    if (file_id < 0) exit(EXIT_FAILURE);
+
+    // Open dataset in file
+    dataset_id = H5Dopen(file_id, path, H5P_DEFAULT);
+    if (dataset_id < 0) exit(EXIT_FAILURE);
+
+    // Determine dataset parameters
+    dataspace_id = H5Dget_space(dataset_id);
+    ndim = H5Sget_simple_extent_ndims(dataspace_id);
+    dims = new hsize_t [ndim];
+
+    // Get dimensions for dataset
+    ndim = H5Sget_simple_extent_dims( dataspace_id, dims, NULL );
+    if ( ndim != 2 )
+    {
+        fprintf(stderr, "Expected dataspace to be 2-dimensional ");
+        fprintf(stderr, "but it appears to be %d-dimensional\n", ndim);
+        exit(EXIT_FAILURE);
+    }
+
+    // Create memory dataspace
+    memspace_id = H5Screate_simple(ndim, dims, NULL);
+    if (memspace_id < 0) exit(EXIT_FAILURE);
+
+    // Allocate memory for matrix and read data from file
+    a = new double [dims[0] * dims[0]];
+    status = H5Dread(dataset_id, H5T_NATIVE_DOUBLE, memspace_id,
+                      dataspace_id, H5P_DEFAULT, a);
+    CHKERR(status, "H5Dread()");
+
+    // Close all remaining HDF5 objects
+    CHKERR(H5Sclose(memspace_id), "H5Sclose()");
+    CHKERR(H5Dclose(dataset_id), "H5Dclose()");
+    CHKERR(H5Sclose(dataspace_id), "H5Sclose()");
+    CHKERR(H5Fclose(file_id), "H5Fclose()");
+
+	double endTime = wtime();
+	double readTime = endTime - startTime;
+
+    startTime = endTime;
+
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+
+    // Power Method Algorithm
+	int cols = (int) dims[0];
+    double x [cols]; // corresponding normalized eigenvector
+    double y [cols]; // placeholder
+
+    //initial eigenvector estimate (using y as a placeholder)
+    for (int i = 0; i < cols; i++) y[i] = 1.0;
+
+    //normalize x (based on placeholder y)
+    normalize(x, y, cols);
+
+    // initialized to any value
+    double* lambda = 0.0;
+
+    // make sure |lambda-lambda_0| > tolerance
+    double lambda_0 = lambda + 2 * tolerance;
+
+    // set block size and number of blocks
+    dim3 block_size(blockSize);
+  	dim3 num_blocks((cols - 1 + block_size.x) / block_size.x);
+
+    // determine matrix size in bytes
+    size_t matrix_size = cols * cols * sizeof(double);
+
+    // determine vector size in bytes
+    size_t vector_size = cols * sizeof(double);
+
+    // declare pointers to matrix and vectors in device memory and allocate memory
+    double *a_d, *x_d, *y_d;
+    cudaMalloc((void**) &a_d, matrix_size); // matrix
+    cudaMalloc((void**) &x_d, vector_size); // eigenvalue
+    cudaMalloc((void**) &y_d, vector_size); // placeholder
+
+    // set a_d to matrix a, and copy it to device
+    cudaMemcpy(a_d, a, matrix_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(x_d, x, vector_size, cudaMemcpyHostToDevice);
+
+	// determine lambda size in bytes
+	size_t double_size = sizeof(double);
+
+	// declare lambda in device memory and allocate memory
+	double* lambda_d;
+	cudaMalloc((void**) &lambda_d, lambda, lambda_size, cudaMemcpyHostToDevice);
+
+	long k = 0;
+	while ((std::abs(lambda - lambda_0) >= tolerance) && k <= numIterations)
+	{
+		power_method<<<num_blocks, block_size>>>(a_d, y_d, x_d, lambda, lambda_0, cols, numBlocks, blockSize, tolerance, numIterations);
+		std::cout << lambda << std::endl << lambda_0 << std::endl;
+		k++;
+	}
+    double executionTime = wtime() - startTime;
+
+    if (quiet) {
+        printf("\n%f %ld %f\n", lambda, k, readTime + executionTime);
+    } else {
+        printf("\nDominant Eigenvalue: %f\nRead Time: %f\nNumber Of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
+        printf("Total Time: %f\nTime Per Loop: %f\nBlock Size: %d\n\n", readTime + executionTime, executionTime / (k + 0.0), blockSize);
+    }
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+    // Clean up and quit
+    delete [] a;
+    delete [] dims;
+}

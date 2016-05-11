@@ -1,0 +1,80 @@
+5,000 element matrix
+
+jordan.hunt@habakkuk:~/cps343/cps343-final-project$ for i in 16 32 64 128 256; do ./power-method-cuda /gc/cps343/matrix/A-5000x5000.dat -s $i; done
+
+Total Time: 4.933138
+Block Size: 16
+
+
+Total Time: 4.948636
+Block Size: 32
+
+
+Total Time: 4.841823
+Block Size: 64
+
+
+Total Time: 4.831481
+Block Size: 128
+
+
+Total Time: 4.927496
+Block Size: 256
+
+jordan.hunt@habakkuk:~/cps343/cps343-final-project$ for i in 16 32 64 128 256; do ./power-method-mpi /gc/cps343/matrix/A-5000x5000.dat; done
+
+Total Time: 4.085460
+Time Per Loop: 0.019528
+
+
+Dominant eigenvalue: 5.497701
+Total Time: 3.885503
+Time Per Loop: 0.019651
+
+
+Dominant eigenvalue: 5.497701
+Total Time: 3.879518
+Time Per Loop: 0.019630
+
+
+Total Time: 3.895491
+Time Per Loop: 0.019695
+
+
+Total Time: 3.879032
+Time Per Loop: 0.019639
+
+
+10,000x10,000 matrix
+
+Linear:
+jordan.hunt@habakkuk:~/cps343/cps343-final-project$ for i in 16; do ./power-method-serial /gc/cps343/matrix/A-10000x10000.dat; done
+
+Total Time: 66.344567
+Time Per Loop: 0.078681
+
+
+MPI with 4 processors: 
+
+Total Time: 12.884068
+Total Time: 12.996721
+
+CUDA: 
+Total Time: 19.271159
+Block Size: 16
+
+Total Time: 19.401874
+Block Size: 32
+
+Total Time: 19.473243
+Block Size: 64
+
+Total Time: 19.416970
+Block Size: 64
+
+Speedup: 
+3.38
+
+
+
+Largest possible matrix of doubles would be 16,000 by 16,000 = 2.048 GB

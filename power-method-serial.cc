@@ -127,9 +127,9 @@ int main( int argc, char* argv[] )
 
     const char* filename = argv[1];
     const char* path = "/A/value";
-
+    bool quiet = false;
     // check for switches
-    while ( ( c = getopt( argc, argv, "e:m:" ) ) != -1 )
+    while ( ( c = getopt( argc, argv, "e:m:q" ) ) != -1 )
 	{
 	    switch( c )
 		{
@@ -145,6 +145,9 @@ int main( int argc, char* argv[] )
 			    exit( EXIT_FAILURE );
 			}
 		    break;
+        case 'q':
+            quiet = true;
+            break;
 		default:
 		    fprintf( stderr, "default usage: %s [-n NUM_SAMPLES]\n", argv[0] );
 		    return EXIT_FAILURE;
@@ -236,9 +239,12 @@ int main( int argc, char* argv[] )
 	}
 
     double executionTime = MPI_Wtime() - startTime;
-
-	printf("\nDominant Eigenvalue: %f\nRead Time: %f\nNumber Of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
-    printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %f\n\n", 1, readTime + executionTime, readTime + executionTime, executionTime / (k + 0.0));
+    if (!quiet) {
+	       printf("\nDominant Eigenvalue: %f\nRead Time: %f\nNumber Of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
+           printf("Number of Processes: %d\nTotal Time: %f\nNumber of Processes * Total Time: %f\nTime Per Loop: %f\n\n", 1, readTime + executionTime, readTime + executionTime, executionTime / (k + 0.0));
+       } else {
+           printf("\n%f\n\n", readTime + executionTime);
+       }
 
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------

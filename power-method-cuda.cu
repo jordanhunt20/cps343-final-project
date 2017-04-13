@@ -285,10 +285,10 @@ int main(int argc, char* argv[])
     double executionTime = wtime() - startTime;
 
     if (quiet) {
-        printf("\n%f %ld %f\n", lambda, k, readTime + executionTime);
+        printf("\n%f\n", readTime + executionTime);
     } else {
         printf("\nDominant Eigenvalue: %f\nRead Time: %f\nNumber Of Iterations: %ld\nExecution Time: %f\n", lambda, readTime, k, executionTime);
-        printf("Total Time: %f\nTime Per Loop: %f\nBlock Size: %ld\n\n", readTime + executionTime, executionTime / (k + 0.0), blockSize);
+        printf("Total Time: %f\nTime Per Loop: %f\n\n", readTime + executionTime, executionTime / (k + 0.0));
     }
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------

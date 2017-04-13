@@ -86,3 +86,7 @@ Speedup:
 
 
 Largest possible matrix of doubles would be 16,000 by 16,000 = 2.048 GB
+
+
+Results:
+
